@@ -109,6 +109,7 @@ pub enum SlackMessageResponseType {
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Builder)]
 pub struct SlackMessageAttachment {
     pub id: Option<i64>,
+    pub blocks: Option<Vec<SlackBlock>>,
     pub color: Option<String>,
     pub fallback: Option<String>,
     pub title: Option<String>,

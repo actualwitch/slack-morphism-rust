@@ -3,44 +3,47 @@ use chrono::{DateTime, TimeZone, Utc};
 use rsb_derive::Builder;
 use rvstruct::ValueStruct;
 use serde::{Deserialize, Serialize};
-use serde_with::skip_serializing_none;
+use serde_with::{serde_as, skip_serializing_none};
 use std::hash::Hash;
 use std::*;
 use url::Url;
 
 mod user;
+
 pub use user::*;
+
 mod team;
+
 pub use team::*;
+
 mod channel;
+
 pub use channel::*;
+
 mod reaction;
+
 pub use reaction::*;
 
+mod star;
+
+pub use star::*;
+
 mod bot;
+
 pub use bot::*;
 
 mod icon;
+
 pub use icon::*;
 
 mod formatters;
+
 pub use formatters::*;
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Serialize, Deserialize, ValueStruct)]
 pub struct SlackTs(pub String);
 
 impl SlackTs {
-    #[deprecated(
-        since = "1.3.5",
-        note = "Use to_date_time_opt() with more accurate error handling and results from chrono::timestamp_millis_opt"
-    )]
-    pub fn to_date_time(&self) -> Result<DateTime<Utc>, num::ParseIntError> {
-        let parts: Vec<&str> = self.value().split('.').collect();
-        let ts_int: i64 = parts[0].parse()?;
-        #[allow(deprecated)]
-        Ok(Utc.timestamp_millis(ts_int * 1000))
-    }
-
     pub fn to_date_time_opt(&self) -> Option<DateTime<Utc>> {
         let parts: Vec<&str> = self.value().split('.').collect();
         if let Ok(ts_int) = parts[0].parse::<i64>() {
@@ -166,11 +169,12 @@ impl fmt::Debug for SlackSigningSecret {
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Serialize, Deserialize, ValueStruct)]
 pub struct EmailAddress(pub String);
 
+#[serde_as]
 #[skip_serializing_none]
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Builder)]
 pub struct SlackResponseMetadata {
     #[serde(default)]
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "serde_with::NoneAsEmptyString")]
     pub next_cursor: Option<SlackCursorId>,
 }
 
@@ -186,6 +190,7 @@ pub enum SlackConversationType {
     Public,
 }
 
+#[allow(clippy::to_string_trait_impl)]
 impl ToString for SlackConversationType {
     fn to_string(&self) -> String {
         match self {
@@ -240,3 +245,19 @@ pub struct SlackEventType(pub String);
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone, Serialize, Deserialize, ValueStruct)]
 pub struct SlackEnterpriseId(pub String);
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_slack_date_time() {
+        let dt = SlackDateTime(
+            DateTime::parse_from_rfc3339("2020-01-01T00:42:42Z")
+                .unwrap()
+                .into(),
+        );
+        let json = serde_json::to_value(&dt).unwrap();
+        assert_eq!(json.as_u64().unwrap(), 1577839362);
+    }
+}

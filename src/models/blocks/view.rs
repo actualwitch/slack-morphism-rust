@@ -4,7 +4,7 @@ use crate::SlackCallbackId;
 use crate::*;
 use rsb_derive::Builder;
 use serde::{Deserialize, Serialize};
-use serde_with::skip_serializing_none;
+use serde_with::{serde_as, skip_serializing_none};
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -16,21 +16,23 @@ pub enum SlackView {
     Modal(SlackModalView),
 }
 
+#[serde_as]
 #[skip_serializing_none]
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Builder)]
 pub struct SlackHomeView {
     pub blocks: Vec<SlackBlock>,
     #[serde(default)]
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "serde_with::NoneAsEmptyString")]
     pub private_metadata: Option<String>,
     #[serde(default)]
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "serde_with::NoneAsEmptyString")]
     pub callback_id: Option<SlackCallbackId>,
     #[serde(default)]
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "serde_with::NoneAsEmptyString")]
     pub external_id: Option<String>,
 }
 
+#[serde_as]
 #[skip_serializing_none]
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Builder)]
 pub struct SlackModalView {
@@ -39,16 +41,16 @@ pub struct SlackModalView {
     pub close: Option<SlackBlockPlainTextOnly>,
     pub submit: Option<SlackBlockPlainTextOnly>,
     #[serde(default)]
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "serde_with::NoneAsEmptyString")]
     pub private_metadata: Option<String>,
     #[serde(default)]
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "serde_with::NoneAsEmptyString")]
     pub callback_id: Option<SlackCallbackId>,
     pub clear_on_close: Option<bool>,
     pub notify_on_close: Option<bool>,
     pub hash: Option<String>,
     #[serde(default)]
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "serde_with::NoneAsEmptyString")]
     pub external_id: Option<String>,
 }
 
@@ -150,5 +152,16 @@ mod test {
         ))
         .unwrap();
         assert_eq!(output, r#"{"response_action":"clear"}"#);
+    }
+
+    #[test]
+    fn test_slack_api_apps_manifest_create_request() {
+        let payload = include_str!("./fixtures/slack_home_view.json");
+        let model: SlackHomeView = serde_json::from_str(payload).unwrap();
+        assert!(model.private_metadata.is_none());
+        assert_eq!(
+            model.callback_id,
+            Some(SlackCallbackId::from("test-callback-id"))
+        );
     }
 }

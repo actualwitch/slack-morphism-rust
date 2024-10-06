@@ -10,7 +10,7 @@ use futures::stream::BoxStream;
 use futures::TryStreamExt;
 
 async fn test_simple_api_calls() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client = SlackClient::new(SlackClientHyperConnector::new());
+    let client = SlackClient::new(SlackClientHyperConnector::new()?);
     let token_value: SlackApiTokenValue = config_env_var("SLACK_TEST_TOKEN")?.into();
     let token: SlackApiToken = SlackApiToken::new(token_value);
 
@@ -31,7 +31,7 @@ async fn test_simple_api_calls() -> Result<(), Box<dyn std::error::Error + Send 
 }
 
 async fn test_post_message() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client = SlackClient::new(SlackClientHyperConnector::new());
+    let client = SlackClient::new(SlackClientHyperConnector::new()?);
     let token_value: SlackApiTokenValue = config_env_var("SLACK_TEST_TOKEN")?.into();
     let token: SlackApiToken = SlackApiToken::new(token_value);
     let session = client.open_session(&token);
@@ -39,7 +39,7 @@ async fn test_post_message() -> Result<(), Box<dyn std::error::Error + Send + Sy
     let message = WelcomeMessageTemplateParams::new("".into());
 
     let post_chat_req =
-        SlackApiChatPostMessageRequest::new("#general".into(), message.render_template());
+        SlackApiChatPostMessageRequest::new("#random".into(), message.render_template());
 
     let post_chat_resp = session.chat_post_message(&post_chat_req).await?;
     println!("post chat resp: {:#?}", &post_chat_resp);
@@ -48,7 +48,7 @@ async fn test_post_message() -> Result<(), Box<dyn std::error::Error + Send + Sy
 }
 
 async fn test_scrolling_user_list() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client = SlackClient::new(SlackClientHyperConnector::new());
+    let client = SlackClient::new(SlackClientHyperConnector::new()?);
     let token_value: SlackApiTokenValue = config_env_var("SLACK_TEST_TOKEN")?.into();
     let token: SlackApiToken = SlackApiToken::new(token_value);
     let session = client.open_session(&token);
@@ -78,6 +78,44 @@ async fn test_scrolling_user_list() -> Result<(), Box<dyn std::error::Error + Se
     while let Some(items) = items_throttled_stream.try_next().await? {
         println!("res: {:#?}", items);
     }
+
+    Ok(())
+}
+
+async fn test_file_upload() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client = SlackClient::new(SlackClientHyperConnector::new()?);
+    let token_value: SlackApiTokenValue = config_env_var("SLACK_TEST_TOKEN")?.into();
+    let token: SlackApiToken = SlackApiToken::new(token_value);
+    let session = client.open_session(&token);
+
+    let test_content: String = "test-content".into();
+
+    let get_upload_url_req =
+        SlackApiFilesGetUploadUrlExternalRequest::new("test.txt".into(), test_content.len());
+    let upload_url_resp = session.get_upload_url_external(&get_upload_url_req).await?;
+    println!("get url resp: {:#?}", &upload_url_resp);
+
+    let file_upload_req = SlackApiFilesUploadViaUrlRequest::new(
+        upload_url_resp.upload_url,
+        test_content.into(),
+        "text/plain".into(),
+    );
+
+    let file_upload_resp = session.files_upload_via_url(&file_upload_req).await?;
+    println!("file_upload_resp: {:#?}", &file_upload_resp);
+
+    let complete_file_upload_req =
+        SlackApiFilesCompleteUploadExternalRequest::new(vec![SlackApiFilesComplete::new(
+            upload_url_resp.file_id,
+        )]); // .with_channel_id("C.....".into());
+
+    let complete_file_upload_resp = session
+        .files_complete_upload_external(&complete_file_upload_req)
+        .await?;
+    println!(
+        "complete_file_upload_resp: {:#?}",
+        &complete_file_upload_resp
+    );
 
     Ok(())
 }
@@ -177,6 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     test_simple_api_calls().await?;
     test_post_message().await?;
     test_scrolling_user_list().await?;
+    test_file_upload().await?;
 
     Ok(())
 }

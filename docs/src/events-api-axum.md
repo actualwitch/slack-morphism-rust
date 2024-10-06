@@ -59,16 +59,16 @@ fn test_error_handler(
     err: Box<dyn std::error::Error + Send + Sync>,
     _client: Arc<SlackHyperClient>,
     _states: SlackClientEventsUserState,
-) -> http::StatusCode {
+) -> HttpStatusCode {
     println!("{:#?}", err);
 
     // Defines what we return Slack server
-    http::StatusCode::BAD_REQUEST
+    HttpStatusCode::BAD_REQUEST
 }
 
 async fn test_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client: Arc<SlackHyperClient> =
-        Arc::new(SlackClient::new(SlackClientHyperConnector::new()));
+        Arc::new(SlackClient::new(SlackClientHyperConnector::new()?));
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8080));
     info!("Loading server: {}", addr);

@@ -1,47 +1,58 @@
 use crate::errors::*;
 use crate::hyper_tokio::ratectl::SlackTokioRateController;
+use crate::hyper_tokio::Body;
 use crate::models::{SlackClientId, SlackClientSecret};
 use crate::*;
 use async_recursion::async_recursion;
 use futures::future::{BoxFuture, FutureExt};
-use hyper::client::*;
+use http_body_util::{BodyExt, Empty, Full};
 use hyper::http::StatusCode;
-use hyper::{Body, Request};
+use hyper::Request;
 use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::*;
+use hyper_util::rt::TokioExecutor;
 use rvstruct::ValueStruct;
 
+use crate::hyper_tokio::multipart_form::{
+    create_multipart_file_content, generate_multipart_boundary,
+};
+use crate::multipart_form::FileMultipartData;
 use crate::prelude::hyper_ext::HyperExtensions;
 use crate::ratectl::SlackApiRateControlConfig;
+use bytes::BytesMut;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
 use std::time::Duration;
+
 use tracing::*;
 use url::Url;
 
 #[derive(Clone, Debug)]
 pub struct SlackClientHyperConnector<H: Send + Sync + Clone + connect::Connect> {
-    hyper_connector: Client<H>,
+    hyper_connector: Client<H, Body>,
     tokio_rate_controller: Option<Arc<SlackTokioRateController>>,
+    slack_api_url: String,
 }
 
-pub type SlackClientHyperHttpsConnector = SlackClientHyperConnector<HttpsConnector<HttpConnector>>;
+pub type SlackClientHyperHttpsConnector =
+    SlackClientHyperConnector<HttpsConnector<connect::HttpConnector>>;
 
-impl SlackClientHyperConnector<HttpsConnector<HttpConnector>> {
-    pub fn new() -> Self {
+impl SlackClientHyperConnector<HttpsConnector<connect::HttpConnector>> {
+    pub fn new() -> std::io::Result<Self> {
         let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()
+            .with_native_roots()?
             .https_only()
             .enable_http2()
             .build();
-        Self::with_connector(https_connector)
+        Ok(Self::with_connector(https_connector))
     }
 }
 
-impl From<HttpsConnector<HttpConnector>>
-    for SlackClientHyperConnector<HttpsConnector<HttpConnector>>
+impl From<HttpsConnector<connect::HttpConnector>>
+    for SlackClientHyperConnector<HttpsConnector<connect::HttpConnector>>
 {
-    fn from(https_connector: hyper_rustls::HttpsConnector<HttpConnector>) -> Self {
+    fn from(https_connector: HttpsConnector<connect::HttpConnector>) -> Self {
         Self::with_connector(https_connector)
     }
 }
@@ -49,8 +60,9 @@ impl From<HttpsConnector<HttpConnector>>
 impl<H: 'static + Send + Sync + Clone + connect::Connect> SlackClientHyperConnector<H> {
     pub fn with_connector(connector: H) -> Self {
         Self {
-            hyper_connector: Client::builder().build::<_, hyper::Body>(connector),
+            hyper_connector: Client::builder(TokioExecutor::new()).build::<_, Body>(connector),
             tokio_rate_controller: None,
+            slack_api_url: SlackClientHttpApiUri::SLACK_API_URI_STR.to_string(),
         }
     }
 
@@ -59,6 +71,13 @@ impl<H: 'static + Send + Sync + Clone + connect::Connect> SlackClientHyperConnec
             tokio_rate_controller: Some(Arc::new(SlackTokioRateController::new(
                 rate_control_config,
             ))),
+            ..self
+        }
+    }
+
+    pub fn with_slack_api_url(self, slack_api_url: &str) -> Self {
+        Self {
+            slack_api_url: slack_api_url.to_string(),
             ..self
         }
     }
@@ -259,6 +278,10 @@ impl<H: 'static + Send + Sync + Clone + connect::Connect> SlackClientHyperConnec
 impl<H: 'static + Send + Sync + Clone + connect::Connect> SlackClientHttpConnector
     for SlackClientHyperConnector<H>
 {
+    fn create_method_uri_path(&self, method_relative_uri: &str) -> ClientResult<Url> {
+        Ok(format!("{}/{}", self.slack_api_url, method_relative_uri).parse()?)
+    }
+
     fn http_get_uri<'a, RS>(
         &'a self,
         full_uri: Url,
@@ -282,7 +305,9 @@ impl<H: 'static + Send + Sync + Clone + connect::Connect> SlackClientHttpConnect
                             context_token,
                         );
 
-                        http_request.body(Body::empty()).map_err(|e| e.into())
+                        http_request
+                            .body(Empty::new().boxed())
+                            .map_err(|e| e.into())
                     },
                     context,
                     None,
@@ -324,7 +349,7 @@ impl<H: 'static + Send + Sync + Clone + connect::Connect> SlackClientHttpConnect
                         client_id.value(),
                         client_secret.value(),
                     )
-                    .body(Body::empty())
+                    .body(Empty::new().boxed())
                     .map_err(|e| e.into())
                 },
                 context,
@@ -367,7 +392,7 @@ impl<H: 'static + Send + Sync + Clone + connect::Connect> SlackClientHttpConnect
                         );
 
                         http_request
-                            .body(post_json.clone().into())
+                            .body(Full::new(post_json.clone().into()).boxed())
                             .map_err(|e| e.into())
                     },
                     context,
@@ -381,36 +406,81 @@ impl<H: 'static + Send + Sync + Clone + connect::Connect> SlackClientHttpConnect
         .boxed()
     }
 
-    fn http_post_uri_form_urlencoded<'a, RQ, RS>(
+    fn http_post_uri_multipart_form<'a, 'p, RS, PT, TS>(
         &'a self,
         full_uri: Url,
-        request_body: &'a RQ,
+        file: Option<FileMultipartData<'p>>,
+        params: &'p PT,
         context: SlackClientApiCallContext<'a>,
     ) -> BoxFuture<'a, ClientResult<RS>>
     where
-        RQ: serde::ser::Serialize + Send + Sync,
         RS: for<'de> serde::de::Deserialize<'de> + Send + 'a + Send + 'a,
+        PT: std::iter::IntoIterator<Item = (&'p str, Option<TS>)> + Clone,
+        TS: AsRef<str> + 'p + Send,
     {
         let context_token = context.token;
-
-        async move {
-            let post_url_form = serde_urlencoded::to_string(request_body)
-                .map_err(|err| map_serde_urlencoded_error(err, None))?;
-
-            let response_body = self
+        let boundary = generate_multipart_boundary();
+        match create_multipart_file_content(params, boundary.as_str(), file) {
+            Ok(file_bytes) => self
                 .send_rate_controlled_request(
-                    || {
-                        let http_request = HyperExtensions::create_http_request(
+                    move || {
+                        let http_body = Full::new(file_bytes.clone()).boxed();
+
+                        let http_base_request = HyperExtensions::create_http_request(
                             full_uri.clone(),
                             hyper::http::Method::POST,
                         )
-                        .header("content-type", "application/x-www-form-urlencoded");
+                        .header(
+                            "content-type",
+                            format!("multipart/form-data; boundary={}", boundary),
+                        );
 
-                        let toke_body_prefix = context_token.map_or_else(String::new, |token| {
-                            format!("token={}&", token.token_value.value())
-                        });
-                        let full_body = toke_body_prefix + &post_url_form;
-                        http_request.body(full_body.into()).map_err(|e| e.into())
+                        let http_request = HyperExtensions::setup_token_auth_header(
+                            http_base_request,
+                            context_token,
+                        );
+
+                        http_request.body(http_body).map_err(|e| e.into())
+                    },
+                    context,
+                    None,
+                    0,
+                )
+                .boxed(),
+            Err(err) => futures::future::err(err.into()).boxed(),
+        }
+    }
+
+    fn http_post_uri_binary<'a, 'p, RS>(
+        &'a self,
+        full_uri: Url,
+        content_type: String,
+        data: &'a [u8],
+        context: SlackClientApiCallContext<'a>,
+    ) -> BoxFuture<'a, ClientResult<RS>>
+    where
+        RS: for<'de> serde::de::Deserialize<'de> + Send + 'a + Send + 'a,
+    {
+        let context_token = context.token;
+        let body_bytes = BytesMut::from(data).freeze();
+
+        async move {
+            let response_body = self
+                .send_rate_controlled_request(
+                    move || {
+                        let http_body = Full::new(body_bytes.clone()).boxed();
+                        let http_base_request = HyperExtensions::create_http_request(
+                            full_uri.clone(),
+                            hyper::http::Method::POST,
+                        )
+                        .header("content-type", content_type.as_str());
+
+                        let http_request = HyperExtensions::setup_token_auth_header(
+                            http_base_request,
+                            context_token,
+                        );
+
+                        http_request.body(http_body).map_err(|e| e.into())
                     },
                     context,
                     None,

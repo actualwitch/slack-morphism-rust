@@ -78,7 +78,11 @@
 //! Examples available on: [github](https://github.com/abdolence/slack-morphism-rust/tree/master/examples).
 //!
 
-#![allow(clippy::new_without_default, clippy::needless_lifetimes)]
+#![allow(
+    clippy::new_without_default,
+    clippy::needless_lifetimes,
+    unused_imports
+)]
 
 pub use client::*;
 pub use scroller::*;
@@ -94,9 +98,11 @@ pub mod errors;
 pub mod listener;
 mod ratectl;
 mod scroller;
+#[cfg(feature = "signature-verifier")]
 pub mod signature_verifier;
 pub mod socket_mode;
 
+mod multipart_form;
 mod token;
 
 #[cfg(feature = "hyper")]
